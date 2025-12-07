@@ -6,18 +6,26 @@ use App\Http\Controllers\AdminController;
 use App\Http\Controllers\UserController; 
 use App\Http\Controllers\BookingController;
 use App\Http\Controllers\TicketTypeController; 
-use App\Http\Controllers\CheckInController; // Controller Check-in Anda
-use App\Http\Controllers\ReviewController; // <-- DITAMBAHKAN: Import Controller Review
+use App\Http\Controllers\CheckInController; 
+use App\Http\Controllers\ReviewController;
 use Illuminate\Support\Facades\Route;
 
-// Rute Halaman Utama (Welcome Page)
+
+// =================================================================
+// ✅ RUTE WEBHOOK MIDTRANS (HARUS PUBLIK DAN DI LUAR MIDDLEWARE)
+// =================================================================
+Route::post('/midtrans/notification', [BookingController::class, 'notificationHandler'])->name('midtrans.notification');
+
+
+// -----------------------------------------------------------------
+// RUTE UMUM (Welcome Page)
+// -----------------------------------------------------------------
 Route::get('/', function () {
     return view('welcome');
 });
 
 // Rute Dashboard (Akses setelah Login dan Verifikasi Email)
 Route::get('/dashboard', function () {
-    // Tentukan ke mana user akan diarahkan setelah login (Dashboard Umum)
     return view('dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');
 
@@ -25,6 +33,7 @@ Route::get('/dashboard', function () {
 // RUTE UTAMA (Membutuhkan Autentikasi)
 // =================================================================
 Route::middleware('auth')->group(function () {
+    
     // -------------------------------------------------------------
     // RUTE PROFILE
     // -------------------------------------------------------------
@@ -33,7 +42,7 @@ Route::middleware('auth')->group(function () {
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy'); 
     
     // -------------------------------------------------------------
-    // RUTE EVENT (CRUD Lengkap - Telah Dirapikan)
+    // RUTE EVENT (CRUD Lengkap)
     // -------------------------------------------------------------
     
     // Read (List)
@@ -73,8 +82,8 @@ Route::middleware('auth')->group(function () {
     // RUTE PENGATURAN TIPE TIKET (NESTED RESOURCE)
     // =============================================================
     Route::resource('events.tickets', TicketTypeController::class)
-            ->except(['show', 'create', 'edit'])
-            ->middleware('permission:edit_event'); 
+        ->except(['show', 'create', 'edit'])
+        ->middleware('permission:edit_event'); 
 
     // -------------------------------------------------------------
     // RUTE BOOKING (Untuk Attendee)
@@ -99,47 +108,41 @@ Route::middleware('auth')->group(function () {
     // =============================================================
     Route::prefix('events/{event}')->name('events.checkin.')->group(function () {
         
-        // 1. Daftar Peserta (List Tickets)
-        Route::get('attendees', [CheckInController::class, 'index'])
+        // 1. Daftar Peserta (List Tickets) - Method index di CheckInController
+        Route::get('attendees', [CheckInController::class, 'index']) 
             ->name('index')
-            ->middleware('permission:edit_event'); // Menggunakan permission edit_event
+            ->middleware('permission:edit_event'); 
 
-        // 2. Halaman Scanner (Form Input QR Code)
-        Route::get('scanner', [CheckInController::class, 'showScanner'])
+        // 2. Halaman Scanner (Form Input QR Code) - Method showScanner di CheckInController
+        Route::get('scanner', [CheckInController::class, 'showScanner']) 
             ->name('scanner')
             ->middleware('permission:edit_event');
 
-        // 3. Proses Check-In (API Endpoint)
-        Route::post('check-in', [CheckInController::class, 'processCheckIn'])
+        // 3. Proses Check-In (API Endpoint) - Method processCheckIn di CheckInController
+        Route::post('check-in', [CheckInController::class, 'processCheckIn']) 
             ->name('process')
             ->middleware('permission:edit_event');
     });
 
     // =============================================================
-    // RUTE REVIEWS EVENT (FOR ATTENDEE - DIPERBAIKI)
+    // RUTE REVIEWS EVENT (FOR ATTENDEE)
     // =============================================================
     Route::post('events/{event}/reviews', [ReviewController::class, 'store'])
-        ->name('events.reviews.store') // <-- Nama diubah agar konsisten
-        ->middleware('permission:review_event'); // <-- Middleware keamanan ditambahkan
-    // =============================================================
+        ->name('events.reviews.store')
+        ->middleware('permission:review_event');
 
     // -------------------------------------------------------------
     // RUTE ADMIN AREA (DILINDUNGI OLEH PERMISSION ADMIN)
     // -------------------------------------------------------------
-    // Hanya pengguna dengan permission:manage_users (yaitu Admin) yang bisa mengakses.
     Route::prefix('admin')->name('admin.')->middleware('permission:manage_users')->group(function () {
         
         // Admin Dashboard
         Route::get('/dashboard', [AdminController::class, 'index'])->name('dashboard');
         
         // RUTE BARU: Manajemen Pengguna (Menggunakan UserController)
-        // Kita hanya mengizinkan aksi index, edit, update, dan destroy.
         Route::resource('users', UserController::class)->only(['index', 'edit', 'update', 'destroy']);
-
-    Route::post('/midtrans/notification', [BookingController::class, 'notificationHandler'])->name('midtrans.notification');
-        
     });
-
-});
+    
+}); // <-- PENUTUP GRUP MIDDLEWARE('auth')
 
 require __DIR__.'/auth.php';

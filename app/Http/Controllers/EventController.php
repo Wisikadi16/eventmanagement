@@ -9,6 +9,10 @@ use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
 use Spatie\CalendarLinks\Link; // <-- Ini sudah benar
+use Illuminate\Support\Str;
+use App\Models\Booking; 
+use Midtrans\Snap;
+use Midtrans\Config;
 
 class EventController extends Controller
 {
@@ -127,7 +131,8 @@ class EventController extends Controller
             $event->nama_event,
             $event->tanggal_mulai, // Ini akan menjadi objek Carbon karena $casts
             $event->tanggal_selesai
-        )->description($event->deskripsi)
+         )->description($event->deskripsi ?? '')
+         
          ->address($event->lokasi);
 
         $calendarLinks = [
@@ -328,4 +333,104 @@ class EventController extends Controller
             'ticket' => $ticket,
         ], 200); // OK
     }
+    
+        public function createPayment(Event $event)
+    {
+        // 1. Konfigurasi Midtrans
+        try {
+            Config::$serverKey = config('services.midtrans.server_key'); // Pastikan ini membaca server key yang benar
+            Config::$isProduction = false;
+            Config::$isSanitized = true;
+            Config::$is3ds = true;
+        } catch (\Exception $e) {
+            // Ini menangkap error konfigurasi Midtrans
+            return back()->with('error', 'Konfigurasi pembayaran gagal: ' . $e->getMessage());
+        }
+
+        // 2. Buat/Update Booking (Menggunakan kolom yang BENAR)
+        $booking = Booking::updateOrCreate(
+            [
+                'attendee_id' => Auth::id(), // ✅ PENTING: Gunakan attendee_id
+                'event_id' => $event->id,
+                'status_pembayaran' => 'pending' // Cari yang masih pending
+            ],
+            [
+                'jumlah_tiket' => 1, // ✅ PENTING: Gunakan jumlah_tiket
+                'total_amount' => 50000, // ✅ PENTING: Gunakan total_amount
+                'tanggal_booking' => now(), // ✅ PENTING: Gunakan tanggal_booking
+            ]
+        );
+
+        // 3. Siapkan Parameter Midtrans
+        $params = [
+            'transaction_details' => [
+                'order_id' => 'ORDER-' . $booking->id . '-' . time(),
+                'gross_amount' => $booking->total_amount,
+            ],
+            'customer_details' => [
+                'first_name' => Auth::user()->name,
+                'email' => Auth::user()->email,
+            ],
+            'item_details' => [
+                [
+                    'id' => $event->id,
+                    'price' => $booking->total_amount,
+                    'quantity' => 1,
+                    'name' => substr($event->nama_event, 0, 50)
+                ]
+            ]
+        ];
+
+        // 4. Minta Snap Token
+        $snapToken = Snap::getSnapToken($params);
+
+        // 5. Return View
+        return view('events.payment', compact('event', 'snapToken'));
+    }      
+        public function finishPayment(Request $request, $id)
+    {
+        $event = Event::findOrFail($id);
+        $user = Auth::user();
+
+        // 1. Cari Booking yang statusnya masih PENDING
+        $booking = \App\Models\Booking::where('attendee_id', $user->id) // ✅ PENTING: Gunakan attendee_id
+                    ->where('event_id', $event->id)
+                    ->where('status_pembayaran', 'pending')
+                    ->latest()
+                    ->first();
+
+        // 2. Cek apakah sudah lunas
+        if (!$booking) {
+            $alreadyPaid = \App\Models\Booking::where('attendee_id', $user->id) // ✅ PENTING: Gunakan attendee_id
+                            ->where('event_id', $event->id)
+                            ->where('status_pembayaran', 'paid')
+                            ->exists();
+        
+            if ($alreadyPaid) {
+                return redirect()->route('bookings.index')->with('info', 'Tiket sudah aktif sebelumnya.');
+            }
+
+            return redirect()->route('events.index')->with('error', 'Data booking tidak ditemukan.');
+        }
+
+        // 3. Update Status
+        $booking->status_pembayaran = 'paid'; 
+        $booking->save();
+
+        // 4. Buat Tiket
+        $ticketExists = \App\Models\Ticket::where('booking_id', $booking->id)->exists();
+    
+        if (!$ticketExists) {
+            \App\Models\Ticket::create([
+                'booking_id' => $booking->id,
+                'ticket_type_id' => $event->ticketTypes->first()->id ?? 1,
+                'qr_code' => 'TIKET-' . Str::random(10),
+                'nama_pemegang_tiket' => $user->name,
+                'statusCheckIn' => 'not-checked-in'
+            ]);
+        }
+
+        // 5. Selesai
+        return redirect()->route('bookings.index')->with('success', 'Pembayaran Berhasil! Tiket Anda sudah aktif.');
+    }   
 }
